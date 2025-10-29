@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import json
 from datetime import datetime, timedelta
 import webbrowser
@@ -130,7 +130,59 @@ class ContributionGraph(tk.Canvas):
             self._tooltip_window.destroy()
             self._tooltip_window = None
 
+# --- Achievement System ---
+ACHIEVEMENTS = [
+    {"id": "first_contribution", "name": "First Contribution", "desc": "Made your first contribution!", "emoji": "🥇"},
+    {"id": "four_contributions", "name": "Hacktoberfest Complete", "desc": "Made 4+ contributions!", "emoji": "🏆"},
+    {"id": "streak_3", "name": "3-Day Streak", "desc": "Contributed 3 days in a row!", "emoji": "🔥"},
+    {"id": "doc_star", "name": "Documentation Star", "desc": "Made a documentation contribution!", "emoji": "📚"},
+]
+
+def get_achievements_for_contributor(contributor):
+    achievements = []
+    if contributor.get_contribution_count() >= 1:
+        achievements.append(ACHIEVEMENTS[0])
+    if contributor.get_contribution_count() >= 4:
+        achievements.append(ACHIEVEMENTS[1])
+    # Streak logic (simple: contributed on 3 consecutive days)
+    dates = [c["date"][:10] for c in contributor.contributions]
+    if len(dates) >= 3:
+        date_objs = sorted(set(datetime.strptime(d, "%Y-%m-%d") for d in dates))
+        for i in range(len(date_objs) - 2):
+            if (date_objs[i+1] - date_objs[i]).days == 1 and (date_objs[i+2] - date_objs[i+1]).days == 1:
+                achievements.append(ACHIEVEMENTS[2])
+                break
+    # Documentation contribution
+    if any(c["type"] == "documentation" for c in contributor.contributions):
+        achievements.append(ACHIEVEMENTS[3])
+    return achievements
+
 class HacktoberfestDesktopUI:
+    # Theme colors
+    LIGHT_THEME = {
+        "bg": "#ffffff",
+        "fg": "#000000",
+        "accent": "#1f6feb",
+        "card_bg": "#f6f8fa",
+        "table_even": "#eef6ff",
+        "table_odd": "#ffffff",
+        "table_top": "#fff8dc",
+        "button_bg": "#1f6feb",
+        "button_fg": "#ffffff"
+    }
+    
+    DARK_THEME = {
+        "bg": "#0d1117",
+        "fg": "#c9d1d9",
+        "accent": "#58a6ff",
+        "card_bg": "#161b22",
+        "table_even": "#1c2128",
+        "table_odd": "#0d1117",
+        "table_top": "#2d333b",
+        "button_bg": "#238636",
+        "button_fg": "#ffffff"
+    }
+
     def __init__(self):
         self.tracker = ProjectTracker()
         self.setup_window()
@@ -160,6 +212,7 @@ class HacktoberfestDesktopUI:
     def create_menu(self):
         from menu_system import MenuSystem
         self.menu_system = MenuSystem(self.root, self.tracker)
+        self.setup_export_menu()  # Add export menu options
 
     def create_notebook(self):
         self.notebook = ttk.Notebook(self.root)
@@ -298,6 +351,26 @@ class HacktoberfestDesktopUI:
         self.search_var.trace('w', self.filter_contributors)
         search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
         search_entry.pack(side='left', fill='x', expand=True, padx=5)
+        
+        # Advanced filter controls
+        ttk.Label(search_frame, text="Type:").pack(side='left', padx=5)
+        self.type_filter_var = tk.StringVar()
+        type_combo = ttk.Combobox(search_frame, textvariable=self.type_filter_var, values=["", "bug-fix", "feature", "documentation", "test", "other"], width=12, state="readonly")
+        type_combo.pack(side='left', padx=5)
+        self.type_filter_var.trace('w', self.filter_contributors)
+        
+        ttk.Label(search_frame, text="Status:").pack(side='left', padx=5)
+        self.status_filter_var = tk.StringVar()
+        status_combo = ttk.Combobox(search_frame, textvariable=self.status_filter_var, values=["", "Completed", "In Progress"], width=12, state="readonly")
+        status_combo.pack(side='left', padx=5)
+        self.status_filter_var.trace('w', self.filter_contributors)
+        
+        # Date range filter (simple: year)
+        ttk.Label(search_frame, text="Year:").pack(side='left', padx=5)
+        self.year_filter_var = tk.StringVar()
+        year_combo = ttk.Combobox(search_frame, textvariable=self.year_filter_var, values=["", str(datetime.now().year)], width=8, state="readonly")
+        year_combo.pack(side='left', padx=5)
+        self.year_filter_var.trace('w', self.filter_contributors)
         
         # Contributors list
         self.contributors_tree = ttk.Treeview(
@@ -618,11 +691,9 @@ class HacktoberfestDesktopUI:
             
             # Calculate badges
             badges = []
-            if metrics['hacktoberfest_complete']:
-                badges.append("🏆")
-            if metrics['contribution_streak'] >= 3:
-                badges += "🔥"
-
+            achievements = get_achievements_for_contributor(self.tracker.get_contributor(rank['username']))
+            badges = [a['emoji'] for a in achievements]
+            
             # Choose tag: top (first), even/odd for alternating rows
             if i == 1:
                 tag = 'top'
@@ -645,12 +716,31 @@ class HacktoberfestDesktopUI:
 
     def filter_contributors(self, *args):
         search_text = self.search_var.get().lower()
+        type_filter = self.type_filter_var.get()
+        status_filter = self.status_filter_var.get()
+        year_filter = self.year_filter_var.get()
         
         for item in self.contributors_tree.get_children():
             values = self.contributors_tree.item(item)['values']
-            if (search_text in str(values[0]).lower() or  # username
-                search_text in str(values[1]).lower() or  # name
-                search_text in str(values[2]).lower()):   # email
+            username, name, email, contribs, status = values[:5]
+            show = True
+            # Text search
+            if search_text and not (search_text in str(username).lower() or search_text in str(name).lower() or search_text in str(email).lower()):
+                show = False
+            # Type filter
+            if type_filter:
+                contributor = self.tracker.get_contributor(username)
+                if not any(c['type'] == type_filter for c in contributor.contributions):
+                    show = False
+            # Status filter
+            if status_filter and ((status_filter == "Completed" and status != "✅") or (status_filter == "In Progress" and status != "🔄")):
+                show = False
+            # Year filter
+            if year_filter:
+                contributor = self.tracker.get_contributor(username)
+                if not any(c['date'].startswith(year_filter) for c in contributor.contributions):
+                    show = False
+            if show:
                 self.contributors_tree.reattach(item, "", "end")
             else:
                 self.contributors_tree.detach(item)
@@ -863,8 +953,103 @@ class HacktoberfestDesktopUI:
             ttk.Label(details_frame, text=str(value)).grid(
                 row=i, column=1, sticky='w', padx=5, pady=2
             )
+        
+        # Achievements section
+        achievements = get_achievements_for_contributor(contributor)
+        if achievements:
+            ach_frame = ttk.LabelFrame(detail_window, text="Achievements")
+            ach_frame.pack(fill='x', padx=10, pady=10)
+            for ach in achievements:
+                ttk.Label(ach_frame, text=f"{ach['emoji']} {ach['name']}: {ach['desc']}", style="Stats.TLabel").pack(anchor='w', padx=5, pady=2)
 
+    def export_contributors_to_csv(self):
+        """Export contributors data to a CSV file"""
+        try:
+            # Ask user for save location
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv")],
+                title="Export Contributors Data"
+            )
+            
+            if not file_path:  # User canceled
+                return
+            
+            contributors = self.tracker.get_all_contributors()
+            
+            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                # Write header
+                writer.writerow(['Username', 'Name', 'Email', 'Total Contributions', 'Streak', 'Days Active', 'Status'])
+                
+                # Write data
+                for contributor in contributors:
+                    metrics = self.tracker.get_contributor_metrics(contributor.username)
+                    writer.writerow([
+                        contributor.username,
+                        contributor.name,
+                        contributor.email,
+                        metrics['total_contributions'],
+                        f"{metrics['contribution_streak']} days",
+                        metrics['days_active'],
+                        "Completed" if metrics['hacktoberfest_complete'] else "In Progress"
+                    ])
+            
+            messagebox.showinfo("Success", "Contributors data exported successfully!")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
 
+    def export_leaderboard_to_csv(self):
+        """Export leaderboard data to a CSV file"""
+        try:
+            # Ask user for save location
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv")],
+                title="Export Leaderboard Data"
+            )
+            
+            if not file_path:  # User canceled
+                return
+            
+            rankings = self.tracker.get_contributors_ranking()
+            
+            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                # Write header
+                writer.writerow(['Rank', 'Username', 'Engagement Score', 'Contributions', 'Streak', 'Active Days'])
+                
+                # Write data
+                for i, rank in enumerate(rankings, start=1):
+                    metrics = self.tracker.get_contributor_metrics(rank['username'])
+                    writer.writerow([
+                        i,
+                        rank['username'],
+                        f"{rank['engagement_score']:.1f}",
+                        metrics['total_contributions'],
+                        f"{metrics['contribution_streak']} days",
+                        metrics['days_active']
+                    ])
+            
+            messagebox.showinfo("Success", "Leaderboard data exported successfully!")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
+
+    def setup_export_menu(self):
+        """Setup the export menu in the menu bar"""
+        export_menu = tk.Menu(self.menu_system.menubar, tearoff=0)
+        self.menu_system.menubar.add_cascade(label="Export", menu=export_menu)
+        
+        export_menu.add_command(
+            label="Export Contributors",
+            command=self.export_contributors_to_csv
+        )
+        export_menu.add_command(
+            label="Export Leaderboard",
+            command=self.export_leaderboard_to_csv
+        )
 
     def run(self):
         self.root.mainloop()
