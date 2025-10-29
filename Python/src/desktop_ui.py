@@ -740,7 +740,7 @@ class HacktoberfestDesktopUI:
             ach_frame = ttk.LabelFrame(detail_window, text="Achievements")
             ach_frame.pack(fill='x', padx=10, pady=10)
             for ach in achievements:
-                ttk.Label(ach_frame, text=f"{ach['emoji']} {ach['name']}: {ach['desc']}", style="Stats.TLabel").pack(anchor='w', padx=5, pady=2)
+                ttk.Label(ach_frame, text=f"{ach['emoji']} {ach['name']}: {ach['desc']}", style="Stats.TLabel", foreground="#1f6feb").pack(anchor='w', padx=5, pady=2)
 
     def run(self):
         self.root.mainloop()
